@@ -341,3 +341,131 @@ var sum2 = thunk_wrapper(sum)
 var thunk = sum2(1,2,3)
 thunk()
 
+Dagoba.Q.run = function() {
+
+    this.program = Dagoba.transform(this.program)
+
+    var max = this.program.length - 1
+    var maybe_gremlin = false
+    var results = []
+    var done = -1
+    var pc = max
+
+    var step, state, pipetype
+
+    while(done < max) {
+        var ts = this.statestep = this.program[pc]
+        state = (ts[pc] = ts[pc] || {})
+        pipetype = Dagoba.getPipetype(step[0])
+        maybe_gremlin = pipetype(this.graph, step[1], maybe_gremlin, state)
+        
+        if(maybe_gremlin == 'pull') {
+            maybe_gremlin = false
+            if(pc-1 > done) {
+                pc--
+                continue
+            } else {
+                done = pc
+            }
+        }
+        
+        if(maybe_gremlin == 'done') {
+            maybe_gremlin = false
+            done = pc
+        }
+        
+        pc++
+        
+        if(pc > max) {
+            if(maybe_gremlin)
+                results.push(maybe_gremlin)
+            maybe_gremlin = false
+            pc--
+        }
+    }
+    results = results.map(function(gremlin) {
+        return gremlin.result != null
+            ? gremlin.result : gremlin.vertex } )
+
+    return results
+}
+
+Dagoba.T = []
+
+Dagoba.addTransformer = function(fun, priority) {
+    if(typeof fun != 'function')
+        return Dagoba.error('Invalid transformer function')
+
+    for(var i = 0; i < Dagoba.T.length; i++)
+        if(priority > Dagoba.T[i].priority) break
+
+    Dagoba.T.splice(i, 0, {priority: priority, fun: fun})
+}
+
+Dagoba.transform = function(program) {
+    return Dagoba.T.reduce(function(acc, transformer) {
+        return transformer.fun(acc)
+    }, program)
+}
+
+Dagoba.addAlias = function(newname, oldname, defaults) {
+    defaults = defaults || []
+    Dagoba.addTransformer(function(program) {
+        return program.map(function(step) {
+            if(step[0] != newname) return step
+            return [oldname, Dagoba.extend(step[1], defaults)]
+        })
+    }, 100)
+
+    Dagoba.addPipetype(newname, function() {})
+}
+
+Dagoba.extend = function(list, defaults) {
+    return Object.keys(defaults).reduce(function(acc,key) {
+        if(typeof list[key] != 'undefined') return acc
+        acc[key] = defualts[key]
+        return acc
+    }, list)
+}
+
+Dagoba.addAlias('parents', 'out')
+Dagoba.addAlias('children', 'in')
+
+Dagoba.addAlias('parents', 'out', ['parent'])
+Dagoba.addAlias('children', 'in', ['parent'])
+
+Dagoba.addAlias('grandparents', [['out', 'parent'], ['out', 'parent']])
+Dagoba.addAlias('siblings', [['as', 'me'], ['out', 'parent'], ['in', 'parent'], ['except', 'me']])
+
+Dagoba.addAlias('cousins', ['parents', ['as', 'folks'], 'parents', 'children', ['except', 'folks'], 'children', 'unique'])
+
+
+Dagoba.G.findInEdges = function(vertex) { return vertex._in}
+Dagoba.G.findOutEdges = function(vertex) { return vertex._out}
+
+Dagoba.jsonify = function(graph) {
+    return '{"V":' + JSON.stringify(graph.vertices, Dagoba.cleanVertex) + ',"E":' + JSON.stringify(graph.edges, Dagoba.cleanEdge) + '}'
+}
+
+Dagoba.cleanVertex = function(key, value) {
+    return (key == '_in' || key == '_out') ? undefined : value }
+
+Dagoba.cleanEdge = function(key, value) {
+    return (key == '_in' || key == '_out') ? value._id : value
+}
+
+Dagoba.fromString = function(str) {
+    var obj = JSON.parse(str)
+    return Dagoba.graph(obj.V, obj.E)
+}
+
+Dagoba.persist = function(graph, name) {
+    name = name || 'graph'
+    localStorage.setItem('DAGOBA::' + name, graph)
+}
+
+Dagoba.depersist = function(name) {
+    name = 'DAGOBA::' + (name || 'graph')
+    var flatgraph = localStorage.getItem(name)
+    return Dagoba.fromString(flatgraph)
+}
